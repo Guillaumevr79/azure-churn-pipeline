@@ -81,3 +81,13 @@ resource "azurerm_data_factory" "adf" {
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
 }
+
+output "storage_account_key" {
+  value     = azurerm_storage_account.adls.primary_access_key
+  sensitive = true
+}
+
+output "eventhub_connection_string" {
+  value     = azurerm_eventhub_namespace.evhns.default_primary_connection_string
+  sensitive = true
+}
