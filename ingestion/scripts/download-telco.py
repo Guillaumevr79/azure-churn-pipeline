@@ -1,5 +1,4 @@
 import os
-import zipfile
 import kaggle
 from azure.storage.blob import BlobServiceClient
 from dotenv import load_dotenv
