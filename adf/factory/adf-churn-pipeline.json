@@ -1,0 +1,10 @@
+{
+	"name": "adf-churn-pipeline",
+	"properties": {
+		"trustModeClaimForMi": {
+			"value": "Disabled",
+			"editable": true
+		}
+	},
+	"location": "westeurope"
+}
