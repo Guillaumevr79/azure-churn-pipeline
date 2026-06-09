@@ -1,0 +1,111 @@
+# Provisionnement de l'infrastructure Azure avec Terraform
+
+## 1. Prérequis
+
+Installer les outils nécessaires :
+  - Terraform >= 1.5
+  - Azure CLI >= 2.50
+  - Un abonnement Azure actif
+
+## 2. Authentification Azure
+
+# Se connecter au compte Azure
+az login
+
+# Vérifier l'abonnement actif (doit afficher westeurope et le bon subscription_id)
+az account show
+
+# Si nécessaire, basculer sur le bon abonnement
+az account set --subscription "<SUBSCRIPTION_ID>"
+
+## 3. Structure des fichiers Terraform
+
+terraform/
+├── main.tf          # Définition de toutes les ressources
+├── variables.tf     # Déclaration des variables (noms, région, etc.)
+└── terraform.tfvars # Valeurs des variables — NE PAS committer (dans .gitignore)
+
+## 4. Ressources provisionnées
+
+Les ressources suivantes sont créées dans main.tf :
+
+### Resource Group
+  Nom : rg-churn-pipeline
+  Région : West Europe
+
+### Storage Account (ADLS Gen2)
+  Nom : adlschurnpipeline
+  Tier : Standard / LRS
+  is_hns_enabled = true  # Obligatoire pour activer ADLS Gen2 (Hierarchical Namespace)
+
+### Containers Medallion Architecture
+  bronze  # Données brutes
+  silver  # Données nettoyées (Delta)
+  gold    # Features engineerées (Delta)
+
+### Event Hubs
+  Namespace : evhns-churn-pipeline (SKU Standard, 1 unité)
+  Hub       : churn-events (2 partitions, rétention 1 jour)
+
+### Databricks Workspace
+  Nom : dbws-churn-pipeline
+  SKU : premium  # Requis pour les secret scopes et Unity Catalog
+
+### Azure Data Factory
+  Nom : adf-churn-pipeline
+
+## 5. Configurer terraform.tfvars
+
+Créer le fichier terraform/terraform.tfvars (non commité) :
+
+  subscription_id      = "<SUBSCRIPTION_ID>"
+  storage_account_name = "adlschurnpipeline"
+
+# Les autres variables ont des valeurs par défaut dans variables.tf
+
+## 6. Initialiser les providers
+
+cd terraform
+
+# Télécharge les providers azurerm ~4.0 et databricks ~1.0
+terraform init
+
+## 7. Vérifier le plan d'exécution
+
+# Affiche les ressources qui seront créées, modifiées ou supprimées
+terraform plan
+
+## 8. Appliquer l'infrastructure
+
+# Crée toutes les ressources (confirmer avec "yes" quand demandé)
+terraform apply
+
+## 9. Récupérer les outputs sensibles
+
+# Clé du storage account (pour .env et secrets Databricks)
+terraform output -raw storage_account_key
+
+# Connection string Event Hubs (pour .env et secrets Databricks)
+terraform output -raw eventhub_connection_string
+
+# Ces valeurs sont marquées sensitive=true dans main.tf — elles n'apparaissent pas en clair dans le plan
+
+## Points d'attention
+
+- Le nom du storage account doit être globalement unique sur Azure, 3 à 24 caractères,
+  minuscules et chiffres uniquement (pas de tirets) — adlschurnpipeline répond à ces critères.
+
+- is_hns_enabled = true est impératif : sans cette option, le storage account est un Blob Storage
+  classique et les chemins abfss:// ne fonctionnent pas dans Spark.
+
+- Le SKU Databricks "standard" est déprécié depuis octobre 2026 ; utiliser "premium" systématiquement.
+  Premium est aussi requis pour les secret scopes Databricks.
+
+- Ne jamais committer terraform.tfvars, terraform.tfstate, terraform.tfstate.backup ni .env.
+  Le .gitignore du projet les exclut déjà — vérifier avant tout git add.
+
+- Les outputs storage_account_key et eventhub_connection_string sont sensibles (sensitive=true) :
+  terraform plan ne les affiche pas, mais terraform output -raw les expose en clair dans le terminal.
+  Ne pas les copier dans des fichiers non exclus du dépôt.
+
+- Les providers sont verrouillés dans .terraform.lock.hcl — le committer pour garantir la reproductibilité.

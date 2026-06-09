@@ -52,6 +52,35 @@ df_gold.show(5)
 
 # COMMAND ----------
 
+# Contrôles qualité Gold
+print("Contrôles qualité...")
+
+# 1. Pas de nulls sur les colonnes critiques
+critical_cols = ["customer_id", "monthly_charges", "churn"]
+for col_name in critical_cols:
+    null_count = df_gold.filter(col(col_name).isNull()).count()
+    assert null_count == 0, f"QUALITÉ KO : {null_count} nulls dans {col_name}"
+    print(f"✓ {col_name} — 0 null")
+
+# 2. Unicité customer_id
+total = df_gold.count()
+distinct = df_gold.select("customer_id").distinct().count()
+assert total == distinct, f"QUALITÉ KO : doublons customer_id ({total} lignes, {distinct} distincts)"
+print(f"✓ customer_id — {total} lignes uniques")
+
+# 3. Churn uniquement 0 ou 1
+invalid_churn = df_gold.filter(~col("churn").isin([0, 1])).count()
+assert invalid_churn == 0, f"QUALITÉ KO : {invalid_churn} valeurs invalides dans churn"
+print(f"✓ churn — valeurs valides (0/1 uniquement)")
+
+# 4. Volume minimum
+assert total >= 5000, f"QUALITÉ KO : volume insuffisant ({total} lignes, minimum attendu 5000)"
+print(f"✓ volume — {total} lignes (seuil 5000 ok)")
+
+print("Tous les contrôles qualité passés ✓")
+
+# COMMAND ----------
+
 # Écriture Gold (Delta)
 df_gold.write \
     .format("delta") \

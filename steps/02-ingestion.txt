@@ -1,0 +1,109 @@
+# Ingestion des données — Batch Kaggle et Streaming Event Hubs
+
+## 1. Prérequis
+
+Créer et activer l'environnement virtuel Python :
+
+cd azure-churn-pipeline
+python -m venv venv
+source venv/bin/activate          # macOS/Linux
+# venv\Scripts\activate           # Windows
+
+Installer les dépendances :
+
+pip install kaggle azure-storage-blob azure-eventhub python-dotenv
+
+## 2. Configurer le fichier .env
+
+Créer un fichier .env à la racine du projet (non commité — dans .gitignore) :
+
+  AZURE_STORAGE_ACCOUNT_NAME=adlschurnpipeline
+  AZURE_STORAGE_ACCOUNT_KEY=<clé récupérée via terraform output -raw storage_account_key>
+  AZURE_EVENTHUB_CONNECTION_STRING=<connection string récupérée via terraform output -raw eventhub_connection_string>
+  AZURE_EVENTHUB_NAME=churn-events
+
+## 3. Configurer les credentials Kaggle
+
+Le script ingestion/scripts/download-telco.py utilise la bibliothèque kaggle.
+Elle s'appuie sur le fichier ~/.kaggle/kaggle.json (ou kaggle.json à la racine du projet).
+
+Format attendu :
+  { "username": "<KAGGLE_USERNAME>", "key": "<KAGGLE_KEY>" }
+
+Créer le fichier et restreindre ses permissions :
+
+mkdir -p ~/.kaggle
+cp kaggle.json ~/.kaggle/kaggle.json
+chmod 600 ~/.kaggle/kaggle.json
+
+# Ne pas committer kaggle.json — l'ajouter au .gitignore si ce n'est pas déjà le cas
+
+## 4. Ingestion batch — Téléchargement et upload vers Bronze
+
+Le script download-telco.py :
+  1. Télécharge le dataset Telco Customer Churn depuis Kaggle (blastchar/telco-customer-churn)
+  2. Extrait le CSV dans ingestion/data/raw/
+  3. Uploade WA_Fn-UseC_-Telco-Customer-Churn.csv vers le container bronze, chemin telco/raw/
+
+Exécuter depuis la racine du projet :
+
+cd ingestion/scripts
+python download-telco.py
+
+# Sortie attendue :
+# Téléchargement du dataset Telco Churn...
+# Téléchargement terminé.
+# Upload WA_Fn-UseC_-Telco-Customer-Churn.csv → bronze/telco/raw/WA_Fn-UseC_-Telco-Customer-Churn.csv
+# ✓ WA_Fn-UseC_-Telco-Customer-Churn.csv uploadé.
+# Ingestion Telco terminée.
+
+Vérifier l'upload dans Azure :
+
+az storage blob list \
+  --account-name adlschurnpipeline \
+  --container-name bronze \
+  --prefix "telco/raw/" \
+  --output table
+
+## 5. Ingestion streaming — Producteur d'événements Event Hubs
+
+Le script produce-events.py génère 100 événements synthétiques clients et les envoie
+vers Event Hubs via EventHubProducerClient en mode batch.
+
+Chaque événement contient : customer_id, timestamp UTC, internet_service, contract,
+payment_method, monthly_charges, tenure_months, support_calls, late_payments.
+
+Le batch se remplit automatiquement ; quand il est plein, il est envoyé et un nouveau batch
+est créé (gestion de la limite de taille Event Hubs).
+
+Exécuter depuis la racine du projet :
+
+cd ingestion/scripts
+python produce-events.py
+
+# Sortie attendue :
+# Envoi de 100 événements vers Event Hubs...
+# ✓ 100 événements envoyés.
+
+Pour modifier le nombre d'événements ou le délai entre envois, éditer l'appel en fin de script :
+
+  produce_events(n_events=500, delay=0.02)
+
+## Points d'attention
+
+- La connection string Event Hubs doit être au format complet :
+    Endpoint=sb://<namespace>.servicebus.windows.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=<KEY>
+  Le SDK azure-eventhub la parse automatiquement — ne pas extraire la clé manuellement.
+
+- AZURE_STORAGE_ACCOUNT_KEY dans .env donne un accès complet au storage account.
+  En production, préférer une SAS token ou un Service Principal avec rôle Storage Blob Data Contributor.
+
+- Le script download-telco.py utilise account_url avec .blob.core.windows.net (API Blob),
+  pas .dfs.core.windows.net (API ADLS/DFS) — les deux fonctionnent pour l'upload simple.
+
+- Le fichier CSV est déjà présent dans ingestion/data/raw/ dans le dépôt.
+  Le script peut donc être ignoré si le fichier existe déjà localement — seule la fonction
+  upload_to_adls() est nécessaire dans ce cas.
+
+- Ne jamais stocker AZURE_STORAGE_ACCOUNT_KEY ou la connection string Event Hubs dans le code
+  ou dans un fichier commité. Passer exclusivement par .env (local) ou dbutils.secrets (Databricks).

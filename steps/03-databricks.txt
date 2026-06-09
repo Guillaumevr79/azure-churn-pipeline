@@ -1,0 +1,156 @@
+# Cluster Databricks, Secret Scope et Transformations Spark
+
+## 1. Prérequis
+
+Installer et configurer le CLI Databricks :
+
+pip install databricks-cli   # ou : pip install databricks-sdk
+
+# Configurer avec le token du workspace (généré depuis Settings → Developer → Access tokens)
+databricks configure
+# Host  : https://adb-7405608294355726.6.azuredatabricks.net
+# Token : <DATABRICKS_ACCESS_TOKEN>
+
+Vérifier la connexion :
+
+databricks workspace list /
+
+## 2. Créer le cluster
+
+# DBR 13.3 LTS (Spark 3.4) — NE PAS utiliser 15.4 (Spark Connect bloque spark.conf.set)
+# data_security_mode SINGLE_USER — NONE est interdit par la policy du workspace
+databricks clusters create --json '{
+  "cluster_name": "churn-cluster",
+  "spark_version": "13.3.x-scala2.12",
+  "node_type_id": "Standard_D2ds_v6",
+  "autotermination_minutes": 30,
+  "num_workers": 1,
+  "data_security_mode": "SINGLE_USER",
+  "spark_conf": {
+    "spark.databricks.delta.preview.enabled": "true"
+  }
+}'
+
+# Noter le cluster_id retourné (ex : 0607-174937-h30nuwtu)
+
+## 3. Créer le secret scope
+
+# Les secrets sont stockés côté Databricks (backend DATABRICKS, pas Azure Key Vault)
+databricks secrets create-scope churn-scope
+
+# Vérifier
+databricks secrets list-scopes
+
+## 4. Stocker les secrets
+
+# Clé du storage account (pour le notebook 00_ingest_telco qui utilise BlobServiceClient)
+databricks secrets put-secret churn-scope storage-key \
+  --string-value "$(terraform -chdir=terraform output -raw storage_account_key)"
+
+# Credentials Kaggle (pour le notebook 00_ingest_telco)
+databricks secrets put-secret churn-scope kaggle-username --string-value "<KAGGLE_USERNAME>"
+databricks secrets put-secret churn-scope kaggle-key     --string-value "<KAGGLE_KEY>"
+
+# Credentials Service Principal (pour l'accès OAuth ADLS dans les notebooks 01, 02, 03)
+databricks secrets put-secret churn-scope sp-client-id     --string-value "<SP_APP_ID>"
+databricks secrets put-secret churn-scope sp-client-secret --string-value "<SP_PASSWORD>"
+databricks secrets put-secret churn-scope sp-tenant-id     --string-value "<TENANT_ID>"
+
+# Vérifier (les valeurs ne sont jamais affichées en clair)
+databricks secrets list-secrets churn-scope
+
+## 5. Créer le Service Principal Azure et lui donner accès au storage
+
+# Créer le SP avec le rôle Storage Blob Data Contributor sur le storage account
+az ad sp create-for-rbac \
+  --name "sp-churn-pipeline" \
+  --role "Storage Blob Data Contributor" \
+  --scopes "/subscriptions/<SUBSCRIPTION_ID>/resourceGroups/rg-churn-pipeline/providers/Microsoft.Storage/storageAccounts/adlschurnpipeline"
+
+# La commande retourne : appId (= client_id), password (= client_secret), tenant
+# Stocker ces valeurs dans les secrets churn-scope définis à l'étape 4
+
+## 6. Configurer OAuth sur le cluster
+
+# Mettre à jour le cluster avec la config OAuth référençant les secrets
+# {{secrets/churn-scope/...}} est la syntaxe Databricks pour injecter un secret dans spark_conf
+databricks clusters edit --json '{
+  "cluster_id": "<CLUSTER_ID>",
+  "cluster_name": "churn-cluster",
+  "spark_version": "13.3.x-scala2.12",
+  "node_type_id": "Standard_D2ds_v6",
+  "autotermination_minutes": 30,
+  "num_workers": 1,
+  "data_security_mode": "SINGLE_USER",
+  "spark_conf": {
+    "spark.databricks.delta.preview.enabled": "true",
+    "fs.azure.account.auth.type.adlschurnpipeline.dfs.core.windows.net": "OAuth",
+    "fs.azure.account.oauth.provider.type.adlschurnpipeline.dfs.core.windows.net": "org.apache.hadoop.fs.azurebfs.oauth2.ClientCredsTokenProvider",
+    "fs.azure.account.oauth2.client.id.adlschurnpipeline.dfs.core.windows.net": "{{secrets/churn-scope/sp-client-id}}",
+    "fs.azure.account.oauth2.client.secret.adlschurnpipeline.dfs.core.windows.net": "{{secrets/churn-scope/sp-client-secret}}",
+    "fs.azure.account.oauth2.client.endpoint.adlschurnpipeline.dfs.core.windows.net": "https://login.microsoftonline.com/<TENANT_ID>/oauth2/token"
+  }
+}'
+
+# Redémarrer le cluster pour appliquer la nouvelle config
+databricks clusters restart <CLUSTER_ID>
+
+## 7. Créer le dossier workspace et importer les notebooks
+
+databricks workspace mkdirs /churn-pipeline
+
+# Importer chaque notebook (répéter pour 00, 01, 02, 03)
+databricks workspace import /churn-pipeline/00_ingest_telco \
+  --file databricks/notebooks/00_ingest_telco.py \
+  --language PYTHON \
+  --overwrite
+
+databricks workspace import /churn-pipeline/01_bronze_to_silver \
+  --file databricks/notebooks/01_bronze_to_silver.py \
+  --language PYTHON \
+  --overwrite
+
+databricks workspace import /churn-pipeline/02_silver_to_gold \
+  --file databricks/notebooks/02_silver_to_gold.py \
+  --language PYTHON \
+  --overwrite
+
+databricks workspace import /churn-pipeline/03_churn_model \
+  --file databricks/notebooks/03_churn_model.py \
+  --language PYTHON \
+  --overwrite
+
+## 8. Exécuter les notebooks dans l'ordre
+
+Depuis l'UI Databricks :
+  1. Ouvrir /churn-pipeline/00_ingest_telco   — attacher au cluster churn-cluster — Run All
+  2. Ouvrir /churn-pipeline/01_bronze_to_silver — Run All
+  3. Ouvrir /churn-pipeline/02_silver_to_gold  — Run All
+  4. Ouvrir /churn-pipeline/03_churn_model     — Run All
+
+Ou via CLI (job à créer) :
+  databricks jobs run-now --job-id <JOB_ID>
+
+## Points d'attention
+
+- CRITIQUE — DBR 13.3 LTS obligatoire (Spark 3.4) : DBR 15.4 utilise Spark Connect qui intercepte
+  spark.conf.set() et lève SparkConnectGrpcException. La config OAuth doit être dans spark_conf
+  du cluster, pas dans le notebook. Les notebooks 01/02/03 ne contiennent donc aucun spark.conf.set().
+
+- CRITIQUE — Unity Catalog interdit le mode NONE : le workspace impose SINGLE_USER ou SHARED.
+  En SINGLE_USER, seul le créateur du cluster peut exécuter les notebooks — c'est le comportement attendu.
+
+- CRITIQUE — Les Serverless notebooks ignorent la spark_conf du cluster : si Serverless est activé
+  par défaut dans le workspace, désactiver l'option "Use Serverless" dans les settings du notebook,
+  puis attacher explicitement au cluster churn-cluster.
+
+- La syntaxe {{secrets/churn-scope/sp-client-id}} dans spark_conf est résolue par le runtime
+  Databricks au démarrage du cluster — jamais exposée dans les logs ni les API.
+
+- Le notebook 00_ingest_telco contient %pip install kaggle azure-storage-blob python-dotenv
+  suivi de dbutils.library.restartPython(). Cette cellule redémarre le kernel Python — les imports
+  suivants doivent être dans une cellule séparée, après le restart.
+
+- Ne pas installer mlflow, numpy, scikit-learn dans 03_churn_model : ils sont dans le runtime
+  DBR 13.3. Un %pip install crée des conflits (typing_extensions.Sentinel + numpy._CopyMode).
+  Le notebook gère ce cas avec un patch inline de typing_extensions.
