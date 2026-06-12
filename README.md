@@ -225,15 +225,40 @@ La CI s'exécute automatiquement sur chaque push vers `main` :
 
 ### Aperçu
 
-> *Captures d'écran à ajouter après exécution complète du pipeline.*
+### Notebooks Databricks
 
-| Capture | Description |
-| ------- | ----------- |
-| `docs/adf_pipeline.png` | Pipeline ADF `pl_churn_pipeline` — vue canvas avec les dépendances |
-| `docs/mlflow_run.png` | Run MLflow `gradient-boosting-v1` avec AUC-ROC 0.84 |
-| `docs/databricks_notebooks.png` | Liste des notebooks dans le workspace `/churn-pipeline` |
-| `docs/github_actions.png` | CI verte — jobs Lint & Tests + Validation Terraform |
-| `docs/adls_containers.png` | Containers Bronze / Silver / Gold dans le portail Azure |
+![Les 5 notebooks Databricks composant le pipeline de transformation](docs/screenshots/notebooks.png)
+*Les 5 notebooks du workspace `/churn-pipeline` : ingestion batch, consumer streaming, transformation Bronze→Silver→Gold et entraînement ML.*
+
+### Architecture Medallion sur ADLS Gen2
+
+![Architecture Medallion : 3 containers Bronze/Silver/Gold sur ADLS Gen2](docs/screenshots/medallion_data.png)
+*Les 3 containers Medallion dans le compte de stockage ADLS Gen2 (HNS activé) : Bronze (données brutes), Silver (données nettoyées), Gold (features ML).*
+
+### Couche Gold — Delta Lake
+
+![Couche Gold : fichiers Parquet Delta Lake avec _delta_log (transactions ACID)](docs/screenshots/gold.png)
+*Répertoire `gold/telco/features/` : fichiers Parquet partitionnés et dossier `_delta_log` garantissant les transactions ACID et le time travel.*
+
+### MLflow — Run GradientBoosting
+
+![MLflow : run gradient-boosting-v1 avec AUC-ROC 0.84 et hyperparamètres](docs/screenshots/churn_model.png)
+*Run `gradient-boosting-v1` dans MLflow : AUC-ROC 0.84, hyperparamètres logués (`n_estimators`, `max_depth`, `learning_rate`) et artefact modèle enregistré.*
+
+### MLflow — Experiments
+
+![MLflow Experiments : 3 runs enregistrés, modèle churn-model en statut Prêt](docs/screenshots/MLFlow.png)
+*Vue Experiments MLflow : 3 runs consécutifs, comparaison des métriques et modèle `churn-model` promu en statut **Prêt** dans le Model Registry.*
+
+### Azure Data Factory — Exécution du pipeline
+
+![Azure Data Factory : pipeline pl_churn_pipeline avec les 2 activités en succès](docs/screenshots/ADF_success_run.png)
+*Canvas ADF du pipeline orchestrateur `pl_churn_pipeline` : activité d'ingestion et activité de transformation Databricks toutes deux terminées avec succès.*
+
+### ADF Monitor — Détail du run
+
+![ADF Monitor : pl_churn_pipeline exécuté en 12m39s (ingestion 8m47s + transformation 3m41s)](docs/screenshots/ADF_monitor.png)
+*Vue Monitor ADF : durée totale 12m39s, dont 8m47s pour l'ingestion Kaggle→Bronze et 3m41s pour la chaîne de transformation Databricks (Bronze→Silver→Gold→ML).*
 
 ---
 
@@ -449,12 +474,37 @@ CI runs automatically on every push to `main`:
 
 ### Screenshots
 
-> *To be added after full pipeline execution.*
+### Databricks Notebooks
 
-| Screenshot | Description |
-| ---------- | ----------- |
-| `docs/adf_pipeline.png` | ADF pipeline `pl_churn_pipeline` — canvas view with dependencies |
-| `docs/mlflow_run.png` | MLflow run `gradient-boosting-v1` with AUC-ROC 0.84 |
-| `docs/databricks_notebooks.png` | Notebook list in workspace `/churn-pipeline` |
-| `docs/github_actions.png` | Green CI — Lint & Tests + Terraform Validation jobs |
-| `docs/adls_containers.png` | Bronze / Silver / Gold containers in Azure portal |
+![The 5 Databricks notebooks making up the transformation pipeline](docs/screenshots/notebooks.png)
+*The 5 notebooks in workspace `/churn-pipeline`: batch ingestion, streaming consumer, Bronze→Silver→Gold transformation, and ML training.*
+
+### Medallion Architecture on ADLS Gen2
+
+![Medallion architecture: 3 Bronze/Silver/Gold containers on ADLS Gen2](docs/screenshots/medallion_data.png)
+*The 3 Medallion containers in the ADLS Gen2 storage account (HNS enabled): Bronze (raw data), Silver (cleaned data), Gold (ML features).*
+
+### Gold Layer — Delta Lake
+
+![Gold layer: Delta Lake Parquet files with _delta_log (ACID transactions)](docs/screenshots/gold.png)
+*`gold/telco/features/` directory: partitioned Parquet files and `_delta_log` folder ensuring ACID transactions and time travel.*
+
+### MLflow — GradientBoosting Run
+
+![MLflow: gradient-boosting-v1 run with AUC-ROC 0.84 and hyperparameters](docs/screenshots/churn_model.png)
+*MLflow run `gradient-boosting-v1`: AUC-ROC 0.84, logged hyperparameters (`n_estimators`, `max_depth`, `learning_rate`), and registered model artifact.*
+
+### MLflow — Experiment Tracking
+
+![MLflow Experiments: 3 registered runs, churn-model in Ready status](docs/screenshots/MLFlow.png)
+*MLflow Experiments view: 3 consecutive runs, metric comparison, and `churn-model` promoted to **Ready** status in the Model Registry.*
+
+### Azure Data Factory — Pipeline Run
+
+![Azure Data Factory: pl_churn_pipeline with both activities succeeded](docs/screenshots/ADF_success_run.png)
+*ADF canvas for orchestrator pipeline `pl_churn_pipeline`: ingestion activity and Databricks transformation activity both completed successfully.*
+
+### ADF Monitor — Run Details
+
+![ADF Monitor: pl_churn_pipeline completed in 12m39s (ingestion 8m47s + transformation 3m41s)](docs/screenshots/ADF_monitor.png)
+*ADF Monitor view: total duration 12m39s, broken down into 8m47s for Kaggle→Bronze ingestion and 3m41s for the Databricks transformation chain (Bronze→Silver→Gold→ML).*
